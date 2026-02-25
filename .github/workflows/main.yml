@@ -6,4 +6,4 @@ jobs:
   noop:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "noop"
+      - run: echo "Dummy text - workflow simply ran."

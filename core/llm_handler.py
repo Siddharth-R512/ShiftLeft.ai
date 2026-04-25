@@ -69,6 +69,9 @@ class Llm_handler:
             logger.error(f"Error: {str(e)}")
             return f"Error: Could not generate response."
 
+    def generate_gherkin(prompt: str):
+        pass
+
 if __name__=="__main__":
     handler = Llm_handler()
     handler.check_connection()

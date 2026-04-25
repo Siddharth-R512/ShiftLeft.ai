@@ -1,5 +1,10 @@
 import streamlit as st
+import time
+
 from ingestion import pdf_to_text, docx_to_text, txt_to_text
+from prompt_template import create_optimal_prompt
+from llm_handler import Llm_handler
+
 
 st.set_page_config(
     page_title="ShiftLeft.ai",
@@ -10,12 +15,29 @@ st.set_page_config(
 
 def initialize_session_states():
     default = {
-        "user_story":""
+        "user_story":"",
+        "user_story_text":"",
+        "is_generating": False,
+        "show_test_case_types": False
     }
 
     for k, v in default.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+def generate_answer(user_story: str) -> str:
+    st.session_state.user_story_text = user_story
+
+    status = st.empty()
+
+    status.info("Model is analyzing story")
+
+    st.session_state.is_generating = True
+    # time.sleep(2)
+
+    prompt = create_optimal_prompt(user_story)
+    status.info("Model is determinal optimal coverage")
+    return ""
 
 
 # Main App
@@ -55,3 +77,40 @@ else:
         ""
     )
 
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    generate_suite = ""
+    generate_suite = st.radio(
+        label="Outputs", 
+        options=["Gherkin", "Test cases"], 
+        index=0, 
+        key="radio_options", 
+        help="Select if you want gherkin or test cases.", 
+        label_visibility="collapsed",
+        horizontal=True
+    )
+
+with col2:
+    is_test_cases = "Test" in generate_suite
+    
+    with st.expander("Test case types", expanded=False):
+        if is_test_cases:
+            test_types = st.multiselect(
+                "Select types",
+                options=["Functional", "Edge Case", "Negative", "Regression"],
+                default=["Functional"],
+                key="test_types"
+            )
+        else:
+            st.caption("⚠️ Only available for Test cases output.")
+
+with col3:
+    generate_button = st.button("Generate", use_container_width=True, type="primary")
+
+with st.container(height=500):
+    if generate_button:
+        if not user_story or len(user_story) < 20:
+            st.error("Enter detailed user story.")
+        else:
+            results = generate_answer(user_story)

@@ -69,10 +69,56 @@ class Llm_handler:
             logger.error(f"Error: {str(e)}")
             return f"Error: Could not generate response."
 
-    def generate_gherkin(prompt: str):
-        pass
+    def generate_output(self, message) -> str:
+        try:
+            client = self._get_client()
+            response = client.chat.completions.create(
+                model=self.model_name,
+                messages=message,
+                max_tokens=2048,
+                temperature=0.0
+            )
 
-if __name__=="__main__":
-    handler = Llm_handler()
-    handler.check_connection()
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Error: {str(e)}")
+            return f"Error: Could not generate response."
+
+    def generate_output_stream(self, message, output_type: str = "Gherkin"):
+        """
+        Stream the LLM output token by token.
+        Yields text chunks as they're received from the API.
+        
+        Args:
+            message: List of message dictionaries with 'role' and 'content'
+            output_type: Either "Gherkin" or "Test cases" for dynamic max_tokens
+        
+        Yields:
+            str: Text chunks from the LLM response
+        """
+        # Dynamic max_tokens based on output type
+        max_tokens = 4096 if output_type == "Test cases" else 2048
+        
+        try:
+            client = self._get_client()
+            response = client.chat.completions.create(
+                model=self.model_name,
+                messages=message,
+                max_tokens=max_tokens,
+                temperature=0.0,
+                seed=42,
+                stream=True
+            )
+
+            for chunk in response:
+                if chunk.choices[0].delta.content is not None:
+                    yield chunk.choices[0].delta.content
+        
+        except Exception as e:
+            logger.error(f"Error during streaming: {str(e)}")
+            yield f"Error: Could not generate response. {str(e)}"
+
+# if __name__=="__main__":
+#     handler = Llm_handler()
+#     handler.check_connection()
 

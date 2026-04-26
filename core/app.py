@@ -2,7 +2,7 @@ import streamlit as st
 import time
 
 from ingestion import pdf_to_text, docx_to_text, txt_to_text
-from prompt_template import create_optimal_prompt
+from prompt_template import create_optimal_prompt, create_llm_messages
 from llm_handler import Llm_handler
 
 
@@ -18,14 +18,24 @@ def initialize_session_states():
         "user_story":"",
         "user_story_text":"",
         "is_generating": False,
-        "show_test_case_types": False
+        "show_test_case_types": False,
+        "llm_response": "",
+        "test_types": ""
     }
 
     for k, v in default.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
-def generate_answer(user_story: str) -> str:
+@st.cache_resource
+def get_llm_handler():
+    """
+    Cached initialization of the LLM handler.
+    The handler and its Groq client are created once and reused across app reruns.
+    """
+    return Llm_handler()
+
+def generate_answer(user_story: str, output_type: str = "Gherkin", test_types: list = None):
     st.session_state.user_story_text = user_story
 
     status = st.empty()
@@ -35,10 +45,18 @@ def generate_answer(user_story: str) -> str:
     st.session_state.is_generating = True
     # time.sleep(2)
 
-    prompt = create_optimal_prompt(user_story)
-    status.info("Model is determinal optimal coverage")
-    return ""
+    messages = create_llm_messages(user_story, output_type, test_types)
 
+    try:
+        status.info("Model is determining optimal coverage")
+        llm = get_llm_handler()
+        status.success("Ready to generate output...")
+        # Return the generator for streaming
+        return status, llm.generate_output_stream(messages, output_type)
+    
+    except Exception as e:
+        status.error(f"Error processing output: {str(e)}")
+        return None, None
 
 # Main App
 st.header("Shift-Left.ai")
@@ -57,12 +75,13 @@ if uploaded_file is not None:
     file_extension = uploaded_file.name.split(".")[-1].lower()
     try:
         if file_extension == "pdf":
-            user_story = pdf_to_text(uploaded_file)
+            extracted = pdf_to_text(uploaded_file)
         elif file_extension == "docx":
-            user_story = docx_to_text(uploaded_file)
+            extracted = docx_to_text(uploaded_file)
         elif file_extension == "txt":
-            user_story = txt_to_text(uploaded_file)
+            extracted = txt_to_text(uploaded_file)
 
+        st.session_state["user_story_text_area"] = extracted
         user_story = st.text_area("Enter user story", value=user_story, height=300, key="user_story_text_area")
     except Exception as e:
         st.error(f"Error processing file: {str(e)}")
@@ -113,4 +132,44 @@ with st.container(height=500):
         if not user_story or len(user_story) < 20:
             st.error("Enter detailed user story.")
         else:
-            results = generate_answer(user_story)
+            test_types_list = st.session_state.get("test_types", ["Functional"]) if is_test_cases else None
+            status, results = generate_answer(user_story, generate_suite, test_types_list)
+            st.session_state["llm_response"] = results
+            
+            if results:
+                try:
+                    # Collect streamed output and count items
+                    output_text = ""
+                    output_placeholder = st.empty()
+                    
+                    for chunk in results:
+                        output_text += chunk
+                        output_placeholder.write(output_text)
+                    
+                    # Count generated items based on output type
+                    if generate_suite == "Test cases":
+                        # Count test cases by looking for "Test ID" or "Test Case" patterns
+                        count = output_text.count("Test ID") + output_text.count("Test Case")
+                        if count == 0:
+                            # Fallback: count numbered items
+                            count = output_text.count("\n##") + output_text.count("\n###")
+                        item_name = "test cases"
+                    else:  # Gherkin
+                        # Count scenarios
+                        count = output_text.count("Scenario:")
+                        if count == 0:
+                            # Fallback: count "Scenario" keyword
+                            count = output_text.count("Scenario ")
+                        item_name = "scenarios"
+                    
+                    # Show success message with count
+                    if status and count > 0:
+                        status.success(f"✅ Complete! Intelligently generated {count} {item_name} for comprehensive coverage.")
+                    elif status:
+                        status.success(f"✅ {generate_suite} generated successfully!")
+                        
+                except Exception as e:
+                    if status:
+                        status.error(f"Error during generation: {str(e)}")
+            elif status is None:
+                st.error("Failed to initialize generation. Please try again.")

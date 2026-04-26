@@ -1,0 +1,175 @@
+import streamlit as st
+import time
+
+from ingestion import pdf_to_text, docx_to_text, txt_to_text
+from prompt_template import create_optimal_prompt, create_llm_messages
+from llm_handler import Llm_handler
+
+
+st.set_page_config(
+    page_title="ShiftLeft.ai",
+    page_icon=None,
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+def initialize_session_states():
+    default = {
+        "user_story":"",
+        "user_story_text":"",
+        "is_generating": False,
+        "show_test_case_types": False,
+        "llm_response": "",
+        "test_types": ""
+    }
+
+    for k, v in default.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+@st.cache_resource
+def get_llm_handler():
+    """
+    Cached initialization of the LLM handler.
+    The handler and its Groq client are created once and reused across app reruns.
+    """
+    return Llm_handler()
+
+def generate_answer(user_story: str, output_type: str = "Gherkin", test_types: list = None):
+    st.session_state.user_story_text = user_story
+
+    status = st.empty()
+
+    status.info("Model is analyzing story")
+
+    st.session_state.is_generating = True
+    # time.sleep(2)
+
+    messages = create_llm_messages(user_story, output_type, test_types)
+
+    try:
+        status.info("Model is determining optimal coverage")
+        llm = get_llm_handler()
+        status.success("Ready to generate output...")
+        # Return the generator for streaming
+        return status, llm.generate_output_stream(messages, output_type)
+    
+    except Exception as e:
+        status.error(f"Error processing output: {str(e)}")
+        return None, None
+
+# Main App
+st.header("Shift-Left.ai")
+
+tab1, tab2 = st.tabs(["Text", "Upload File"])
+
+with tab1:
+    user_story =""
+
+with tab2:
+    uploaded_file = st.file_uploader(
+        "Upload docx, pdf or txt file",
+        type=["docx", "pdf", "txt"]
+    )
+if uploaded_file is not None:
+    file_extension = uploaded_file.name.split(".")[-1].lower()
+    try:
+        if file_extension == "pdf":
+            extracted = pdf_to_text(uploaded_file)
+        elif file_extension == "docx":
+            extracted = docx_to_text(uploaded_file)
+        elif file_extension == "txt":
+            extracted = txt_to_text(uploaded_file)
+
+        st.session_state["user_story_text_area"] = extracted
+        user_story = st.text_area("Enter user story", value=user_story, height=300, key="user_story_text_area")
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")
+        user_story = ""
+else:
+    user_story = st.text_area(
+        "Enter user story",
+        value=st.session_state.get("user_story_text_area", ""),
+        height=300,
+        key="user_story_text_area",
+        placeholder="Enter any feature or story you want." \
+        ""
+    )
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    generate_suite = ""
+    generate_suite = st.radio(
+        label="Outputs", 
+        options=["Gherkin", "Test cases"], 
+        index=0, 
+        key="radio_options", 
+        help="Select if you want gherkin or test cases.", 
+        label_visibility="collapsed",
+        horizontal=True
+    )
+
+with col2:
+    is_test_cases = "Test" in generate_suite
+    
+    with st.expander("Test case types", expanded=False):
+        if is_test_cases:
+            test_types = st.multiselect(
+                "Select types",
+                options=["Functional", "Edge Case", "Negative", "Regression"],
+                default=["Functional"],
+                key="test_types"
+            )
+        else:
+            st.caption("⚠️ Only available for Test cases output.")
+
+with col3:
+    generate_button = st.button("Generate", use_container_width=True, type="primary")
+
+with st.container(height=500):
+    if generate_button:
+        if not user_story or len(user_story) < 20:
+            st.error("Enter detailed user story.")
+        else:
+            test_types_list = st.session_state.get("test_types", ["Functional"]) if is_test_cases else None
+            status, results = generate_answer(user_story, generate_suite, test_types_list)
+            st.session_state["llm_response"] = results
+            
+            if results:
+                try:
+                    # Collect streamed output and count items
+                    output_text = ""
+                    output_placeholder = st.empty()
+                    
+                    for chunk in results:
+                        output_text += chunk
+                        output_placeholder.write(output_text)
+                    
+                    # Count generated items based on output type
+                    if generate_suite == "Test cases":
+                        # Count test cases by looking for "Test ID" or "Test Case" patterns
+                        count = output_text.count("Test ID") + output_text.count("Test Case")
+                        if count == 0:
+                            # Fallback: count numbered items
+                            count = output_text.count("\n##") + output_text.count("\n###")
+                        item_name = "test cases"
+                    else:  # Gherkin
+                        # Count scenarios
+                        count = output_text.count("Scenario:")
+                        if count == 0:
+                            # Fallback: count "Scenario" keyword
+                            count = output_text.count("Scenario ")
+                        item_name = "scenarios"
+                    
+                    # Show success message with count
+                    if status and count > 0:
+                        status.success(f"✅ Complete! Intelligently generated {count} {item_name} for comprehensive coverage.")
+                    elif status:
+                        status.success(f"✅ {generate_suite} generated successfully!")
+                        
+                except Exception as e:
+                    if status:
+                        status.error(f"Error during generation: {str(e)}")
+            elif status is None:
+                st.error("Failed to initialize generation. Please try again.")

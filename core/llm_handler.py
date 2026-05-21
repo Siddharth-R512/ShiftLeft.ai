@@ -5,10 +5,6 @@ from dotenv import load_dotenv
 from typing import List, Dict, Optional
 from groq import Groq
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -112,6 +108,7 @@ class Llm_handler:
 
             for chunk in response:
                 if chunk.choices[0].delta.content is not None:
+                    logger.info(f"Received chunk 1: {chunk.choices[0].delta.content}")
                     yield chunk.choices[0].delta.content
         
         except Exception as e:

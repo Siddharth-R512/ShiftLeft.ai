@@ -1,10 +1,16 @@
 import streamlit as st
 import time
+import logging
 
 from ingestion import pdf_to_text, docx_to_text, txt_to_text
 from prompt_template import create_optimal_prompt, create_llm_messages
 from llm_handler import Llm_handler
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s -%(message)s'
+)
+logger = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="ShiftLeft.ai",
@@ -14,6 +20,9 @@ st.set_page_config(
 )
 
 def initialize_session_states():
+    """
+    Initialize streamlit's session state variables.
+    """
     default = {
         "user_story":"",
         "user_story_text":"",
@@ -36,6 +45,9 @@ def get_llm_handler():
     return Llm_handler()
 
 def generate_answer(user_story: str, output_type: str = "Gherkin", test_types: list = None):
+    """
+    
+    """
     st.session_state.user_story_text = user_story
 
     status = st.empty()
@@ -46,6 +58,7 @@ def generate_answer(user_story: str, output_type: str = "Gherkin", test_types: l
     # time.sleep(2)
 
     messages = create_llm_messages(user_story, output_type, test_types)
+    
 
     try:
         status.info("Model is determining optimal coverage")
@@ -60,6 +73,17 @@ def generate_answer(user_story: str, output_type: str = "Gherkin", test_types: l
 
 # Main App
 st.header("Shift-Left.ai")
+
+toggle_on = st.toggle("Quick Mode?", key="quick_mode", help="Generate results quickly on minimal requirements")
+if toggle_on:
+    st.write("QUICK MODE on")
+
+if toggle_on:
+    uploaded_file = st.file_uploader(
+        "upload .docx, pdf, txt",
+        type=["docx", "pdf", "txt"]
+    )
+        
 
 tab1, tab2 = st.tabs(["Text", "Upload File"])
 
@@ -135,6 +159,8 @@ with st.container(height=500):
             test_types_list = st.session_state.get("test_types", ["Functional"]) if is_test_cases else None
             status, results = generate_answer(user_story, generate_suite, test_types_list)
             st.session_state["llm_response"] = results
+            logger.info(f"STATUS = {status}")
+            logger.info(f"RESULT = {results}")
             
             if results:
                 try:

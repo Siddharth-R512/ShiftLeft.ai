@@ -3,7 +3,7 @@ import time
 import logging
 
 from ingestion import pdf_to_text, docx_to_text, txt_to_text
-from prompt_template import create_optimal_prompt, create_llm_messages
+from prompt_template import create_llm_messages
 from llm_handler import Llm_handler
 
 logging.basicConfig(
@@ -65,7 +65,7 @@ def generate_answer(user_story: str, output_type: str = "Gherkin", test_types: l
         llm = get_llm_handler()
         status.success("Ready to generate output...")
         # Return the generator for streaming
-        return status, llm.generate_output_stream(messages, output_type)
+        return status, llm.generate_output(messages, output_type)
     
     except Exception as e:
         status.error(f"Error processing output: {str(e)}")
@@ -73,17 +73,6 @@ def generate_answer(user_story: str, output_type: str = "Gherkin", test_types: l
 
 # Main App
 st.header("Shift-Left.ai")
-
-toggle_on = st.toggle("Quick Mode?", key="quick_mode", help="Generate results quickly on minimal requirements")
-if toggle_on:
-    st.write("QUICK MODE on")
-
-if toggle_on:
-    uploaded_file = st.file_uploader(
-        "upload .docx, pdf, txt",
-        type=["docx", "pdf", "txt"]
-    )
-        
 
 tab1, tab2 = st.tabs(["Text", "Upload File"])
 
@@ -158,21 +147,14 @@ with st.container(height=500):
         else:
             test_types_list = st.session_state.get("test_types", ["Functional"]) if is_test_cases else None
             status, results = generate_answer(user_story, generate_suite, test_types_list)
-            st.session_state["llm_response"] = results
             logger.info(f"STATUS = {status}")
             logger.info(f"RESULT = {results}")
             
             if results:
                 try:
-                    # Collect streamed output and count items
-                    output_text = ""
-                    output_placeholder = st.empty()
+                    output_text = results
+                    st.write(output_text)
                     
-                    for chunk in results:
-                        output_text += chunk
-                        output_placeholder.write(output_text)
-                    
-                    # Count generated items based on output type
                     if generate_suite == "Test cases":
                         # Count test cases by looking for "Test ID" or "Test Case" patterns
                         count = output_text.count("Test ID") + output_text.count("Test Case")

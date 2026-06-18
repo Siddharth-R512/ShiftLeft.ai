@@ -16,11 +16,11 @@ def feature_to_gherkin(feature: Feature) -> str:
     lines.append("")
 
     if feature.background:
-        lines.append("  Background")
+        lines.append("  Background:")
         lines.append(_render_steps(feature.background, "    "))
         lines.append("")
 
-    for sc in feature.scenrios:
+    for sc in feature.scenarios:
         if sc.tags:
             lines.append("  "+" ".join(f"@{t}" for t in sc.tags))
         kind = "Scenario Outline" if sc.is_outline else "Scenario"
@@ -41,7 +41,7 @@ def feature_to_csv(feature: Feature) -> str:
     writer = csv.writer(buf)
 
     writer.writerow(["Test ID", "Title", "Tags", "Type", "Steps", "Expected Result"])
-    for i, sc in enumerate(feature.scenrios, start=1):
+    for i, sc in enumerate(feature.scenarios, start=1):
         actions = [s for s in sc.steps if s.keyword.value != "Then"]
         expected = [s for s in sc.steps if s.keyword.value == "Then"]
         steps_text = "\n".join(f"{s.keyword.value} {s.text}" for s in actions)

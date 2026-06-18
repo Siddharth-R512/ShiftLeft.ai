@@ -27,17 +27,22 @@ def initialize_session_states():
     Initialize streamlit's session state variables.
     """
     default = {
-        "user_story":"",
-        "user_story_text":"",
+        "user_story": "",
+        "user_story_text": "",
         "is_generating": False,
         "show_test_case_types": False,
         "llm_response": "",
-        "test_types": ""
+        "test_types": "",
+        "gherkin_text": "",
+        "csv_text": "",
+        "download_basename": "",
     }
 
     for k, v in default.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+initialize_session_states()
 
 @st.cache_resource
 def get_llm_handler():
@@ -160,14 +165,36 @@ with st.container(height=500):
                 gherkin_text = feature_to_gherkin(feature)
                 st.code(gherkin_text, language="gherkin")
 
+                # Persist results so the download buttons survive reruns
                 safe = feature.name.lower().replace(" ", "_")
-                st.download_button("Download .feature", gherkin_text,
-                                file_name=f"{safe}.feature", mime="text/plain")
-                st.download_button("Download test cases (CSV)", feature_to_csv(feature),
-                                file_name=f"{safe}_testcases.csv", mime="text/csv")
+                st.session_state["gherkin_text"] = gherkin_text
+                st.session_state["csv_text"] = feature_to_csv(feature)
+                st.session_state["download_basename"] = safe
             except json.JSONDecodeError:
                 st.error("Model returned malformed JSON. Try again.")
             except ValidationError as e:
                 st.error(f"Output didn't match schema: {e}")
             except Exception as e:
                 st.error(f"Generation failed: {str(e)}")
+
+# Download buttons live outside and below the container.
+# They render whenever a result exists in session state.
+if st.session_state.get("gherkin_text"):
+    safe = st.session_state["download_basename"]
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        st.download_button(
+            "Download .feature",
+            st.session_state["gherkin_text"],
+            file_name=f"{safe}.feature",
+            mime="text/plain",
+            use_container_width=True,
+        )
+    with dl_col2:
+        st.download_button(
+            "Download test cases (CSV)",
+            st.session_state["csv_text"],
+            file_name=f"{safe}_testcases.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )

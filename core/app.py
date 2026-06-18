@@ -1,10 +1,13 @@
 import streamlit as st
 import time
 import logging
+import json
+from pydantic import ValidationError
 
 from ingestion import pdf_to_text, docx_to_text, txt_to_text
 from prompt_template import create_llm_messages
 from llm_handler import Llm_handler
+from render import feature_to_gherkin, feature_to_csv
 
 logging.basicConfig(
     level=logging.INFO,
@@ -146,38 +149,25 @@ with st.container(height=500):
             st.error("Enter detailed user story.")
         else:
             test_types_list = st.session_state.get("test_types", ["Functional"]) if is_test_cases else None
-            status, results = generate_answer(user_story, generate_suite, test_types_list)
-            logger.info(f"STATUS = {status}")
-            logger.info(f"RESULT = {results}")
-            
-            if results:
-                try:
-                    output_text = results
-                    st.write(output_text)
-                    
-                    if generate_suite == "Test cases":
-                        # Count test cases by looking for "Test ID" or "Test Case" patterns
-                        count = output_text.count("Test ID") + output_text.count("Test Case")
-                        if count == 0:
-                            # Fallback: count numbered items
-                            count = output_text.count("\n##") + output_text.count("\n###")
-                        item_name = "test cases"
-                    else:  # Gherkin
-                        # Count scenarios
-                        count = output_text.count("Scenario:")
-                        if count == 0:
-                            # Fallback: count "Scenario" keyword
-                            count = output_text.count("Scenario ")
-                        item_name = "scenarios"
-                    
-                    # Show success message with count
-                    if status and count > 0:
-                        status.success(f"✅ Complete! Intelligently generated {count} {item_name} for comprehensive coverage.")
-                    elif status:
-                        status.success(f"✅ {generate_suite} generated successfully!")
-                        
-                except Exception as e:
-                    if status:
-                        status.error(f"Error during generation: {str(e)}")
-            elif status is None:
-                st.error("Failed to initialize generation. Please try again.")
+            messages = create_llm_messages(user_story, generate_suite, test_types_list)
+            try:
+                llm = get_llm_handler()
+                with st.spinner("Generating scenarios..."):
+                    feature = llm.generate_feature(messages)
+
+                st.success(f"Generated {len(feature.scenarios)} scenarios.")
+
+                gherkin_text = feature_to_gherkin(feature)
+                st.code(gherkin_text, language="gherkin")
+
+                safe = feature.name.lower().replace(" ", "_")
+                st.download_button("Download .feature", gherkin_text,
+                                file_name=f"{safe}.feature", mime="text/plain")
+                st.download_button("Download test cases (CSV)", feature_to_csv(feature),
+                                file_name=f"{safe}_testcases.csv", mime="text/csv")
+            except json.JSONDecodeError:
+                st.error("Model returned malformed JSON. Try again.")
+            except ValidationError as e:
+                st.error(f"Output didn't match schema: {e}")
+            except Exception as e:
+                st.error(f"Generation failed: {str(e)}")

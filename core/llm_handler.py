@@ -5,10 +5,6 @@ from dotenv import load_dotenv
 from typing import List, Dict, Optional
 from groq import Groq
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -69,22 +65,7 @@ class Llm_handler:
             logger.error(f"Error: {str(e)}")
             return f"Error: Could not generate response."
 
-    def generate_output(self, message) -> str:
-        try:
-            client = self._get_client()
-            response = client.chat.completions.create(
-                model=self.model_name,
-                messages=message,
-                max_tokens=2048,
-                temperature=0.0
-            )
-
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Error: {str(e)}")
-            return f"Error: Could not generate response."
-
-    def generate_output_stream(self, message, output_type: str = "Gherkin"):
+    def generate_output(self, message, output_type: str = "Gherkin"):
         """
         Stream the LLM output token by token.
         Yields text chunks as they're received from the API.
@@ -106,17 +87,14 @@ class Llm_handler:
                 messages=message,
                 max_tokens=max_tokens,
                 temperature=0.0,
-                seed=42,
-                stream=True
+                seed=42
             )
 
-            for chunk in response:
-                if chunk.choices[0].delta.content is not None:
-                    yield chunk.choices[0].delta.content
+            return response.choices[0].message.content
         
         except Exception as e:
             logger.error(f"Error during streaming: {str(e)}")
-            yield f"Error: Could not generate response. {str(e)}"
+            return f"Error: Could not generate response. {str(e)}"
 
 # if __name__=="__main__":
 #     handler = Llm_handler()

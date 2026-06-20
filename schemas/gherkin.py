@@ -59,4 +59,4 @@ class Feature(BaseModel):
     description: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     background: Optional[List[Step]] = None
-    scenrios: List[Scenario]
+    scenarios: List[Scenario]

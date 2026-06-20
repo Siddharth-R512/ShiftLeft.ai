@@ -1,9 +1,12 @@
 import os
 import logging
+import json
 
 from dotenv import load_dotenv
 from typing import List, Dict, Optional
 from groq import Groq
+from pydantic import ValidationError
+from schemas.gherkin import Feature
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +98,25 @@ class Llm_handler:
         except Exception as e:
             logger.error(f"Error during streaming: {str(e)}")
             return f"Error: Could not generate response. {str(e)}"
+        
+    def generate_feature(self, messages, max_retries: int = 2) -> Feature:
+        client = self._get_client()
+        last_error = None
+        for attempt in range(max_retries):
+            response = client.chat.completions.create(
+                model=self.model_name, messages=messages,
+                max_tokens=4096, temperature=0.0, seed=42,
+                response_format={"type": "json_object"},
+            )
+            raw = response.choices[0].message.content
+            raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            try:
+                data = json.loads(raw)
+                return Feature.model_validate(data)
+            except (json.JSONDecodeError, ValidationError) as e:
+                last_error = e
+                logger.warning(f"Attempt {attempt+1} failed validation: {e}")
+        raise last_error
 
 # if __name__=="__main__":
 #     handler = Llm_handler()

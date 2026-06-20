@@ -1,10 +1,13 @@
 import streamlit as st
 import time
 import logging
+import json
+from pydantic import ValidationError
 
 from ingestion import pdf_to_text, docx_to_text, txt_to_text
 from prompt_template import create_llm_messages
 from llm_handler import Llm_handler
+from render import feature_to_gherkin, feature_to_csv
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,17 +27,22 @@ def initialize_session_states():
     Initialize streamlit's session state variables.
     """
     default = {
-        "user_story":"",
-        "user_story_text":"",
+        "user_story": "",
+        "user_story_text": "",
         "is_generating": False,
         "show_test_case_types": False,
         "llm_response": "",
-        "test_types": ""
+        "test_types": "",
+        "gherkin_text": "",
+        "csv_text": "",
+        "download_basename": "",
     }
 
     for k, v in default.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+initialize_session_states()
 
 @st.cache_resource
 def get_llm_handler():
@@ -146,38 +154,47 @@ with st.container(height=500):
             st.error("Enter detailed user story.")
         else:
             test_types_list = st.session_state.get("test_types", ["Functional"]) if is_test_cases else None
-            status, results = generate_answer(user_story, generate_suite, test_types_list)
-            logger.info(f"STATUS = {status}")
-            logger.info(f"RESULT = {results}")
-            
-            if results:
-                try:
-                    output_text = results
-                    st.write(output_text)
-                    
-                    if generate_suite == "Test cases":
-                        # Count test cases by looking for "Test ID" or "Test Case" patterns
-                        count = output_text.count("Test ID") + output_text.count("Test Case")
-                        if count == 0:
-                            # Fallback: count numbered items
-                            count = output_text.count("\n##") + output_text.count("\n###")
-                        item_name = "test cases"
-                    else:  # Gherkin
-                        # Count scenarios
-                        count = output_text.count("Scenario:")
-                        if count == 0:
-                            # Fallback: count "Scenario" keyword
-                            count = output_text.count("Scenario ")
-                        item_name = "scenarios"
-                    
-                    # Show success message with count
-                    if status and count > 0:
-                        status.success(f"✅ Complete! Intelligently generated {count} {item_name} for comprehensive coverage.")
-                    elif status:
-                        status.success(f"✅ {generate_suite} generated successfully!")
-                        
-                except Exception as e:
-                    if status:
-                        status.error(f"Error during generation: {str(e)}")
-            elif status is None:
-                st.error("Failed to initialize generation. Please try again.")
+            messages = create_llm_messages(user_story, generate_suite, test_types_list)
+            try:
+                llm = get_llm_handler()
+                with st.spinner("Generating scenarios..."):
+                    feature = llm.generate_feature(messages)
+
+                st.success(f"Generated {len(feature.scenarios)} scenarios.")
+
+                gherkin_text = feature_to_gherkin(feature)
+                st.code(gherkin_text, language="gherkin")
+
+                # Persist results so the download buttons survive reruns
+                safe = feature.name.lower().replace(" ", "_")
+                st.session_state["gherkin_text"] = gherkin_text
+                st.session_state["csv_text"] = feature_to_csv(feature)
+                st.session_state["download_basename"] = safe
+            except json.JSONDecodeError:
+                st.error("Model returned malformed JSON. Try again.")
+            except ValidationError as e:
+                st.error(f"Output didn't match schema: {e}")
+            except Exception as e:
+                st.error(f"Generation failed: {str(e)}")
+
+# Download buttons live outside and below the container.
+# They render whenever a result exists in session state.
+if st.session_state.get("gherkin_text"):
+    safe = st.session_state["download_basename"]
+    dl_col1, dl_col2 = st.columns(2)
+    with dl_col1:
+        st.download_button(
+            "Download .feature",
+            st.session_state["gherkin_text"],
+            file_name=f"{safe}.feature",
+            mime="text/plain",
+            use_container_width=True,
+        )
+    with dl_col2:
+        st.download_button(
+            "Download test cases (CSV)",
+            st.session_state["csv_text"],
+            file_name=f"{safe}_testcases.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )

@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from typing import List, Dict, Optional
 from groq import Groq
 from pydantic import ValidationError
-from schemas.gherkin import Feature
+from schemas.gherkin import Feature, AcceptanceCriteria
 
 logger = logging.getLogger(__name__)
 
@@ -67,37 +67,37 @@ class Llm_handler:
         except Exception as e:
             logger.error(f"Error: {str(e)}")
             return f"Error: Could not generate response."
-
-    def generate_output(self, message, output_type: str = "Gherkin"):
+        
+    @staticmethod   
+    def _strip_unwanted(raw:str) -> str:
+        return (raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+    
+    def generate_ac(self, message, max_retries:int=2) -> AcceptanceCriteria:
         """
-        Stream the LLM output token by token.
-        Yields text chunks as they're received from the API.
-        
-        Args:
-            message: List of message dictionaries with 'role' and 'content'
-            output_type: Either "Gherkin" or "Test cases" for dynamic max_tokens
-        
-        Yields:
-            str: Text chunks from the LLM response
+        Stage 1:
+        Story -> AcceptanceCriteria
+        returns validated AcceptanceCriteria object. Retries on bad schema.
         """
-        # Dynamic max_tokens based on output type
-        max_tokens = 4096 if output_type == "Test cases" else 2048
-        
-        try:
-            client = self._get_client()
+        client = self._get_client()
+        last_error = None
+        for attempt in range(max_retries):
             response = client.chat.completions.create(
                 model=self.model_name,
                 messages=message,
-                max_tokens=max_tokens,
+                max_tokens=2048,
                 temperature=0.0,
-                seed=42
+                seed=42,
+                response_format={"type": "json_object"}
             )
+            raw = self._strip_unwanted(raw=response.choices[0].message.content)
+            try:
+                data = json.loads(raw)
+                return AcceptanceCriteria.model_validate(data)
+            except (json.JSONDecodeError, ValidationError) as e:
+                last_error = e
+                logger.warning(f"Attempt {attempt+1} failed validation: {e}")
+        raise last_error
 
-            return response.choices[0].message.content
-        
-        except Exception as e:
-            logger.error(f"Error during streaming: {str(e)}")
-            return f"Error: Could not generate response. {str(e)}"
         
     def generate_feature(self, messages, max_retries: int = 2) -> Feature:
         client = self._get_client()

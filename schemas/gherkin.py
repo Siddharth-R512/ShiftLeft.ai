@@ -60,3 +60,11 @@ class Feature(BaseModel):
     tags: List[str] = Field(default_factory=list)
     background: Optional[List[Step]] = None
     scenarios: List[Scenario]
+
+# AC
+class AcceptanceCriterion(BaseModel):
+    id: str
+    text: str
+
+class AcceptanceCriteria(BaseModel):
+    items: List[AcceptanceCriterion]

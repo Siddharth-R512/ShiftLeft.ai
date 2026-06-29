@@ -5,7 +5,7 @@ import json
 from pydantic import ValidationError
 
 from ingestion import pdf_to_text, docx_to_text, txt_to_text
-from prompt_template import create_llm_messages
+from prompt_template import create_llm_messages, create_llm_messages_ac
 from llm_handler import Llm_handler
 from render import feature_to_gherkin, feature_to_csv
 
@@ -32,6 +32,7 @@ def initialize_session_states():
         "is_generating": False,
         "show_test_case_types": False,
         "llm_response": "",
+        "ac_items":[],
         "test_types": "",
         "gherkin_text": "",
         "csv_text": "",
@@ -119,58 +120,62 @@ else:
 
 col1, col2, col3 = st.columns(3)
 
-with col1:
-    generate_suite = ""
-    generate_suite = st.radio(
-        label="Outputs", 
-        options=["Gherkin", "Test cases"], 
-        index=0, 
-        key="radio_options", 
-        help="Select if you want gherkin or test cases.", 
-        label_visibility="collapsed",
-        horizontal=True
-    )
+# with col1:
+#     generate_suite = ""
+#     generate_suite = st.radio(
+#         label="Outputs", 
+#         options=["Gherkin", "Test cases"], 
+#         index=0, 
+#         key="radio_options", 
+#         help="Select if you want gherkin or test cases.", 
+#         label_visibility="collapsed",
+#         horizontal=True
+#     )
 
-with col2:
-    is_test_cases = "Test" in generate_suite
+# with col2:
+#     is_test_cases = "Test" in generate_suite
     
-    with st.expander("Test case types", expanded=False):
-        if is_test_cases:
-            test_types = st.multiselect(
-                "Select types",
-                options=["Functional", "Edge Case", "Negative", "Regression"],
-                default=["Functional"],
-                key="test_types"
-            )
-        else:
-            st.caption("⚠️ Only available for Test cases output.")
+#     with st.expander("Test case types", expanded=False):
+#         if is_test_cases:
+#             test_types = st.multiselect(
+#                 "Select types",
+#                 options=["Functional", "Edge Case", "Negative", "Regression"],
+#                 default=["Functional"],
+#                 key="test_types"
+#             )
+#         else:
+#             st.caption("⚠️ Only available for Test cases output.")
 
 with col3:
     generate_button = st.button("Generate", use_container_width=True, type="primary")
 
-with st.container(height=500):
+with st.container():
     if generate_button:
         if not user_story or len(user_story) < 20:
             st.error("Enter detailed user story.")
         else:
-            test_types_list = st.session_state.get("test_types", ["Functional"]) if is_test_cases else None
-            messages = create_llm_messages(user_story, generate_suite, test_types_list)
+            # test_types_list = st.session_state.get("test_types", ["Functional"]) if is_test_cases else None
+            # messages = create_llm_messages(user_story, generate_suite, test_types_list)
+            messages = create_llm_messages_ac(user_story=user_story)
             try:
                 llm = get_llm_handler()
                 with st.spinner("Generating scenarios..."):
-                    feature = llm.generate_feature(messages)
-                    logger.info(feature)
+                    ac = llm.generate_ac(messages)
+                    logger.info(ac)
 
-                st.success(f"Generated {len(feature.scenarios)} scenarios.")
+                st.success(f"Generated {len(ac.items)} acceptance criterias.")
+                st.session_state["ac_items"] = ac
+                st.write(ac)
 
-                gherkin_text = feature_to_gherkin(feature)
-                st.code(gherkin_text, language="gherkin")
+                # gherkin_text = feature_to_gherkin(feature)
+                st.code(ac, language="json")
+
 
                 # Persist results so the download buttons survive reruns
-                safe = feature.name.lower().replace(" ", "_")
-                st.session_state["gherkin_text"] = gherkin_text
-                st.session_state["csv_text"] = feature_to_csv(feature)
-                st.session_state["download_basename"] = safe
+                # safe = feature.name.lower().replace(" ", "_")
+                # st.session_state["gherkin_text"] = gherkin_text
+                # st.session_state["csv_text"] = feature_to_csv(feature)
+                # st.session_state["download_basename"] = safe
             except json.JSONDecodeError:
                 st.error("Model returned malformed JSON. Try again.")
             except ValidationError as e:
@@ -180,22 +185,22 @@ with st.container(height=500):
 
 # Download buttons live outside and below the container.
 # They render whenever a result exists in session state.
-if st.session_state.get("gherkin_text"):
-    safe = st.session_state["download_basename"]
-    dl_col1, dl_col2 = st.columns(2)
-    with dl_col1:
-        st.download_button(
-            "Download .feature",
-            st.session_state["gherkin_text"],
-            file_name=f"{safe}.feature",
-            mime="text/plain",
-            use_container_width=True,
-        )
-    with dl_col2:
-        st.download_button(
-            "Download test cases (CSV)",
-            st.session_state["csv_text"],
-            file_name=f"{safe}_testcases.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
+# if st.session_state.get("gherkin_text"):
+#     safe = st.session_state["download_basename"]
+#     dl_col1, dl_col2 = st.columns(2)
+#     with dl_col1:
+#         st.download_button(
+#             "Download .feature",
+#             st.session_state["gherkin_text"],
+#             file_name=f"{safe}.feature",
+#             mime="text/plain",
+#             use_container_width=True,
+#         )
+#     with dl_col2:
+#         st.download_button(
+#             "Download test cases (CSV)",
+#             st.session_state["csv_text"],
+#             file_name=f"{safe}_testcases.csv",
+#             mime="text/csv",
+#             use_container_width=True,
+#         )

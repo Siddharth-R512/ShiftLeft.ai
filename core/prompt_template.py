@@ -57,3 +57,30 @@ Include negative and edge cases. Use a Scenario Outline with examples for data-d
 
     return [{"role": "system", "content": system_content},
             {"role": "user", "content": user_content}]
+
+def create_llm_messages_ac(user_story: str) -> List[Dict[str, str]]:
+    """
+    Stage 1 prompt: user story -> acceptance criteria.
+    Personality: be exhaustive about rules; do not write tests yet.
+    """
+    system_prompt = """You are an expert Quality Assurance (QA) Engineer.
+Analyze the provided user story and enumerate every distinct, testable rule it implies."""
+
+    user_prompt = f"""Output ONLY a valid JSON object. No markdown fences, no prose, no commentary.
+
+Your job is COVERAGE, not test design. Enumerate every distinct, testable rule the
+story implies: happy paths, boundaries, error conditions, and implicit expectations.
+Each item is ONE rule stated as a verifiable condition. Do NOT write Given/When/Then
+steps yet. Keep ids contiguous: AC1, AC2, AC3, ...
+
+Strict output schema:
+{{"items": [
+  {{"id": "AC1", "text": "Detailed, testable acceptance criterion..."}},
+  {{"id": "AC2", "text": "Detailed, testable acceptance criterion..."}}
+]}}
+
+USER STORY:
+{user_story}"""
+
+    return [{"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}]

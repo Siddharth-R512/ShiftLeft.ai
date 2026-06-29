@@ -5,7 +5,7 @@ import json
 from pydantic import ValidationError
 
 from ingestion import pdf_to_text, docx_to_text, txt_to_text
-from prompt_template import create_llm_messages, create_llm_messages_ac
+from prompt_template import create_llm_messages_ac, create_scenario_messages
 from llm_handler import Llm_handler
 from render import feature_to_gherkin, feature_to_csv
 
@@ -52,33 +52,6 @@ def get_llm_handler():
     The handler and its Groq client are created once and reused across app reruns.
     """
     return Llm_handler()
-
-def generate_answer(user_story: str, output_type: str = "Gherkin", test_types: list = None):
-    """
-    
-    """
-    st.session_state.user_story_text = user_story
-
-    status = st.empty()
-
-    status.info("Model is analyzing story")
-
-    st.session_state.is_generating = True
-    # time.sleep(2)
-
-    messages = create_llm_messages(user_story, output_type, test_types)
-    
-
-    try:
-        status.info("Model is determining optimal coverage")
-        llm = get_llm_handler()
-        status.success("Ready to generate output...")
-        # Return the generator for streaming
-        return status, llm.generate_output(messages, output_type)
-    
-    except Exception as e:
-        status.error(f"Error processing output: {str(e)}")
-        return None, None
 
 # Main App
 st.header("Shift-Left.ai")
@@ -150,38 +123,80 @@ with col3:
     generate_button = st.button("Generate", use_container_width=True, type="primary")
 
 with st.container():
+    # --- Stage 1: generate ACs (only runs the rerun after "Generate" is clicked) ---
     if generate_button:
         if not user_story or len(user_story) < 20:
             st.error("Enter detailed user story.")
         else:
-            # test_types_list = st.session_state.get("test_types", ["Functional"]) if is_test_cases else None
-            # messages = create_llm_messages(user_story, generate_suite, test_types_list)
             messages = create_llm_messages_ac(user_story=user_story)
             try:
                 llm = get_llm_handler()
-                with st.spinner("Generating scenarios..."):
+                with st.spinner("Generating acceptance criteria..."):
                     ac = llm.generate_ac(messages)
                     logger.info(ac)
-
-                st.success(f"Generated {len(ac.items)} acceptance criterias.")
-                st.session_state["ac_items"] = ac
-                st.write(ac)
-
-                # gherkin_text = feature_to_gherkin(feature)
-                st.code(ac, language="json")
-
-
-                # Persist results so the download buttons survive reruns
-                # safe = feature.name.lower().replace(" ", "_")
-                # st.session_state["gherkin_text"] = gherkin_text
-                # st.session_state["csv_text"] = feature_to_csv(feature)
-                # st.session_state["download_basename"] = safe
+                st.session_state.ac_items = [item.model_dump() for item in ac.items]
+                st.session_state.feature = None          # clear any stale feature
+                st.session_state.user_story_saved = user_story   # keep the story for call 2
+                st.success(f"Generated {len(ac.items)} acceptance criteria.")
             except json.JSONDecodeError:
                 st.error("Model returned malformed JSON. Try again.")
             except ValidationError as e:
                 st.error(f"Output didn't match schema: {e}")
             except Exception as e:
                 st.error(f"Generation failed: {str(e)}")
+
+    # --- Stage 2: review + scenario generation (runs whenever ACs exist in state) ---
+    if st.session_state.ac_items:
+        st.subheader("Review acceptance criteria")
+        st.caption("Edit, add, or delete criteria before spending the second call.")
+
+        edited = st.data_editor(
+            st.session_state.ac_items,
+            num_rows="dynamic",
+            width="stretch",
+            key="ac_editor",
+            column_config={
+                "id": st.column_config.TextColumn("AC ID", width="small"),
+                "text": st.column_config.TextColumn("Acceptance criterion", width="large"),
+            },
+        )
+
+        c1, _, c2 = st.columns(3)
+        if c1.button("← Back / regenerate"):
+            st.session_state.ac_items = []
+            st.session_state.feature = None
+            st.rerun()
+
+        if c2.button("Generate scenarios →", type="primary", width="stretch"):
+            clean = [r for r in edited if r.get("text", "").strip()]
+            for i, r in enumerate(clean, start=1):
+                r["id"] = f"AC{i}"
+            st.session_state.ac_items = clean
+
+            if not clean:
+                st.error("Add at least one acceptance criterion before continuing.")
+            else:
+                try:
+                    with st.spinner("Generating scenarios..."):
+                        feature = get_llm_handler().generate_feature(
+                            create_scenario_messages(
+                                st.session_state.user_story_saved, clean
+                            )
+                        )
+                    st.session_state.feature = feature
+                    st.session_state.download_basename = (
+                        feature.name.lower().replace(" ", "_") or "feature"
+                    )
+                    logger.info("Generated %d scenarios", len(feature.scenarios))
+                except Exception as e:
+                    st.error(f"Scenario generation failed: {str(e)}")
+
+    # --- Stage 3: display the feature (runs whenever a feature exists in state) ---
+    if st.session_state.get("feature"):
+        st.subheader("Generated feature")
+        st.write(st.session_state.feature)
+
+            
 
 # Download buttons live outside and below the container.
 # They render whenever a result exists in session state.

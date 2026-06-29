@@ -5,7 +5,7 @@ import json
 from pydantic import ValidationError
 
 from ingestion import pdf_to_text, docx_to_text, txt_to_text
-from prompt_template import create_llm_messages
+from prompt_template import create_llm_messages_ac, create_scenario_messages
 from llm_handler import Llm_handler
 from render import feature_to_gherkin, feature_to_csv
 
@@ -27,13 +27,11 @@ def initialize_session_states():
     Initialize streamlit's session state variables.
     """
     default = {
+        "stage": "input",
         "user_story": "",
         "user_story_text": "",
-        "is_generating": False,
-        "show_test_case_types": False,
-        "llm_response": "",
         "test_types": "",
-        "gherkin_text": "",
+        "ac_items": [],
         "csv_text": "",
         "download_basename": "",
     }
@@ -52,32 +50,6 @@ def get_llm_handler():
     """
     return Llm_handler()
 
-def generate_answer(user_story: str, output_type: str = "Gherkin", test_types: list = None):
-    """
-    
-    """
-    st.session_state.user_story_text = user_story
-
-    status = st.empty()
-
-    status.info("Model is analyzing story")
-
-    st.session_state.is_generating = True
-    # time.sleep(2)
-
-    messages = create_llm_messages(user_story, output_type, test_types)
-    
-
-    try:
-        status.info("Model is determining optimal coverage")
-        llm = get_llm_handler()
-        status.success("Ready to generate output...")
-        # Return the generator for streaming
-        return status, llm.generate_output(messages, output_type)
-    
-    except Exception as e:
-        status.error(f"Error processing output: {str(e)}")
-        return None, None
 
 # Main App
 st.header("Shift-Left.ai")
@@ -119,82 +91,152 @@ else:
 
 col1, col2, col3 = st.columns(3)
 
-with col1:
-    generate_suite = ""
-    generate_suite = st.radio(
-        label="Outputs", 
-        options=["Gherkin", "Test cases"], 
-        index=0, 
-        key="radio_options", 
-        help="Select if you want gherkin or test cases.", 
-        label_visibility="collapsed",
-        horizontal=True
-    )
+# with col1:
+#     generate_suite = ""
+#     generate_suite = st.radio(
+#         label="Outputs", 
+#         options=["Gherkin", "Test cases"], 
+#         index=0, 
+#         key="radio_options", 
+#         help="Select if you want gherkin or test cases.", 
+#         label_visibility="collapsed",
+#         horizontal=True
+#     )
 
-with col2:
-    is_test_cases = "Test" in generate_suite
+# with col2:
+#     is_test_cases = "Test" in generate_suite
     
-    with st.expander("Test case types", expanded=False):
-        if is_test_cases:
-            test_types = st.multiselect(
-                "Select types",
-                options=["Functional", "Edge Case", "Negative", "Regression"],
-                default=["Functional"],
-                key="test_types"
-            )
-        else:
-            st.caption("⚠️ Only available for Test cases output.")
+#     with st.expander("Test case types", expanded=False):
+#         if is_test_cases:
+#             test_types = st.multiselect(
+#                 "Select types",
+#                 options=["Functional", "Edge Case", "Negative", "Regression"],
+#                 default=["Functional"],
+#                 key="test_types"
+#             )
+#         else:
+#             st.caption("⚠️ Only available for Test cases output.")
 
 with col3:
-    generate_button = st.button("Generate", use_container_width=True, type="primary")
+    generate_button = st.button("Generate", width="stretch", type="primary")
 
-with st.container(height=500):
-    if generate_button:
-        if not user_story or len(user_story) < 20:
-            st.error("Enter detailed user story.")
+def _go(stage: str):
+    st.session_state.stage = stage
+    st.rerun()
+
+with st.container():
+
+    # --- STAGE 1: input -> call 1 (story -> AC) ---
+    if st.session_state.stage == "input":
+        if generate_button:
+            if not user_story or len(user_story) < 20:
+                st.error("Enter a detailed user story (at least 20 characters).")
+            else:
+                st.session_state.user_story_text = user_story
+                try:
+                    llm = get_llm_handler()
+                    with st.spinner("Enumerating acceptance criteria..."):
+                        messages = create_llm_messages_ac(user_story=user_story)
+                        ac = llm.generate_ac(message=messages)
+                    st.session_state.ac_items = [c.model_dump() for c in ac.items]
+                    logger.info("Generated %d acceptance criteria", len(ac.items))
+                    _go("review")
+                except Exception as e:
+                        st.error(f"AC generation failed: {str(e)}")
+
+    elif st.session_state.stage == "review":
+        st.subheader("Review acceptance criteria")
+        st.caption(
+            "Edit, add, or delete criteria before spending the second call. "
+        )
+        edited = st.data_editor(
+            st.session_state.ac_items,
+            num_rows="dynamic",
+            width="stretch",
+            key="ac_editor",
+            column_config={
+                "id": st.column_config.TextColumn("AC ID", width="small"),
+                "text": st.column_config.TextColumn("Acceptance criterion", width="large"),
+            },
+        )
+        c1, c2 = st.columns(2)
+        if c1.button("← Back / regenerate", width="stretch"):
+            st.session_state.ac_items = []
+            _go("input")
+
+        if c2.button("Generate scenarios →", type="primary", width="stretch"):
+            # Drop empty rows, then renumber so ids stay contiguous after edits/deletes.
+            clean = [r for r in edited if r.get("text", "").strip()]
+            for i, r in enumerate(clean, start=1):
+                r["id"] = f"AC{i}"
+            st.session_state.ac_items = clean
+
+            if not clean:
+                st.error("Add at least one acceptance criterion before continuing.")
+            else:
+                try:
+                    with st.spinner("Generating scenarios..."):
+                        feature = get_llm_handler().generate_feature(
+                            create_scenario_messages(
+                                st.session_state.user_story_text, clean
+                            )
+                        )
+                    st.session_state.feature = feature
+                    st.session_state.download_basename = (
+                        feature.name.lower().replace(" ", "_") or "feature"
+                    )
+                    logger.info("Generated %d scenarios", len(feature.scenarios))
+                    _go("output")
+                except Exception as e:
+                    st.error(f"Scenario generation failed: {str(e)}")
+
+    # --- STAGE 3: output + coverage check ---
+    elif st.session_state.stage == "output":
+        feature = st.session_state.feature
+        ac_ids = {a["id"] for a in st.session_state.ac_items}
+        covered = {v for sc in feature.scenarios for v in sc.verifies}
+
+        gaps = sorted(ac_ids - covered, key=lambda x: (len(x), x))
+        if gaps:
+            st.warning(f"No scenario covers: {', '.join(gaps)}")
         else:
-            test_types_list = st.session_state.get("test_types", ["Functional"]) if is_test_cases else None
-            messages = create_llm_messages(user_story, generate_suite, test_types_list)
-            try:
-                llm = get_llm_handler()
-                with st.spinner("Generating scenarios..."):
-                    feature = llm.generate_feature(messages)
+            st.success(
+                f"All {len(ac_ids)} criteria covered by {len(feature.scenarios)} scenarios."
+            )
 
-                st.success(f"Generated {len(feature.scenarios)} scenarios.")
+        # Flag any verifies pointing at ids the user did not approve.
+        stray = sorted({v for v in covered if v not in ac_ids})
+        if stray:
+            st.info(f"Scenarios reference unknown AC ids: {', '.join(stray)}")
 
-                gherkin_text = feature_to_gherkin(feature)
-                st.code(gherkin_text, language="gherkin")
+        st.code(feature_to_gherkin(feature), language="gherkin")
 
-                # Persist results so the download buttons survive reruns
-                safe = feature.name.lower().replace(" ", "_")
-                st.session_state["gherkin_text"] = gherkin_text
-                st.session_state["csv_text"] = feature_to_csv(feature)
-                st.session_state["download_basename"] = safe
-            except json.JSONDecodeError:
-                st.error("Model returned malformed JSON. Try again.")
-            except ValidationError as e:
-                st.error(f"Output didn't match schema: {e}")
-            except Exception as e:
-                st.error(f"Generation failed: {str(e)}")
+        if st.button("<- Start over", width="stretch"):
+            st.session_state.feature = None
+            st.session_state.ac_items = []
+            _go("input")
+
+
 
 # Download buttons live outside and below the container.
 # They render whenever a result exists in session state.
-if st.session_state.get("gherkin_text"):
-    safe = st.session_state["download_basename"]
-    dl_col1, dl_col2 = st.columns(2)
-    with dl_col1:
+if st.session_state.stage == "output" and st.session_state.feature is not None:
+    feature = st.session_state.feature
+    safe = st.session_state.download_basename or "feature"
+    dl1, dl2, dl3 = st.columns(3)
+    with dl1:
         st.download_button(
             "Download .feature",
-            st.session_state["gherkin_text"],
+            feature_to_gherkin(feature),
             file_name=f"{safe}.feature",
             mime="text/plain",
-            use_container_width=True,
+            width="stretch",
         )
-    with dl_col2:
+    with dl3:
         st.download_button(
             "Download test cases (CSV)",
-            st.session_state["csv_text"],
+            feature_to_csv(feature),
             file_name=f"{safe}_testcases.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )

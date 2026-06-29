@@ -27,14 +27,11 @@ def initialize_session_states():
     Initialize streamlit's session state variables.
     """
     default = {
+        "stage": "input",
         "user_story": "",
         "user_story_text": "",
-        "is_generating": False,
-        "show_test_case_types": False,
-        "llm_response": "",
-        "ac_items":[],
         "test_types": "",
-        "gherkin_text": "",
+        "ac_items": [],
         "csv_text": "",
         "download_basename": "",
     }
@@ -52,6 +49,7 @@ def get_llm_handler():
     The handler and its Groq client are created once and reused across app reruns.
     """
     return Llm_handler()
+
 
 # Main App
 st.header("Shift-Left.ai")
@@ -120,36 +118,37 @@ col1, col2, col3 = st.columns(3)
 #             st.caption("⚠️ Only available for Test cases output.")
 
 with col3:
-    generate_button = st.button("Generate", use_container_width=True, type="primary")
+    generate_button = st.button("Generate", width="stretch", type="primary")
+
+def _go(stage: str):
+    st.session_state.stage = stage
+    st.rerun()
 
 with st.container():
-    # --- Stage 1: generate ACs (only runs the rerun after "Generate" is clicked) ---
-    if generate_button:
-        if not user_story or len(user_story) < 20:
-            st.error("Enter detailed user story.")
-        else:
-            messages = create_llm_messages_ac(user_story=user_story)
-            try:
-                llm = get_llm_handler()
-                with st.spinner("Generating acceptance criteria..."):
-                    ac = llm.generate_ac(messages)
-                    logger.info(ac)
-                st.session_state.ac_items = [item.model_dump() for item in ac.items]
-                st.session_state.feature = None          # clear any stale feature
-                st.session_state.user_story_saved = user_story   # keep the story for call 2
-                st.success(f"Generated {len(ac.items)} acceptance criteria.")
-            except json.JSONDecodeError:
-                st.error("Model returned malformed JSON. Try again.")
-            except ValidationError as e:
-                st.error(f"Output didn't match schema: {e}")
-            except Exception as e:
-                st.error(f"Generation failed: {str(e)}")
 
-    # --- Stage 2: review + scenario generation (runs whenever ACs exist in state) ---
-    if st.session_state.ac_items:
+    # --- STAGE 1: input -> call 1 (story -> AC) ---
+    if st.session_state.stage == "input":
+        if generate_button:
+            if not user_story or len(user_story) < 20:
+                st.error("Enter a detailed user story (at least 20 characters).")
+            else:
+                st.session_state.user_story_text = user_story
+                try:
+                    llm = get_llm_handler()
+                    with st.spinner("Enumerating acceptance criteria..."):
+                        messages = create_llm_messages_ac(user_story=user_story)
+                        ac = llm.generate_ac(message=messages)
+                    st.session_state.ac_items = [c.model_dump() for c in ac.items]
+                    logger.info("Generated %d acceptance criteria", len(ac.items))
+                    _go("review")
+                except Exception as e:
+                        st.error(f"AC generation failed: {str(e)}")
+
+    elif st.session_state.stage == "review":
         st.subheader("Review acceptance criteria")
-        st.caption("Edit, add, or delete criteria before spending the second call.")
-
+        st.caption(
+            "Edit, add, or delete criteria before spending the second call. "
+        )
         edited = st.data_editor(
             st.session_state.ac_items,
             num_rows="dynamic",
@@ -160,14 +159,13 @@ with st.container():
                 "text": st.column_config.TextColumn("Acceptance criterion", width="large"),
             },
         )
-
-        c1, _, c2 = st.columns(3)
-        if c1.button("← Back / regenerate"):
+        c1, c2 = st.columns(2)
+        if c1.button("← Back / regenerate", width="stretch"):
             st.session_state.ac_items = []
-            st.session_state.feature = None
-            st.rerun()
+            _go("input")
 
         if c2.button("Generate scenarios →", type="primary", width="stretch"):
+            # Drop empty rows, then renumber so ids stay contiguous after edits/deletes.
             clean = [r for r in edited if r.get("text", "").strip()]
             for i, r in enumerate(clean, start=1):
                 r["id"] = f"AC{i}"
@@ -180,7 +178,7 @@ with st.container():
                     with st.spinner("Generating scenarios..."):
                         feature = get_llm_handler().generate_feature(
                             create_scenario_messages(
-                                st.session_state.user_story_saved, clean
+                                st.session_state.user_story_text, clean
                             )
                         )
                     st.session_state.feature = feature
@@ -188,34 +186,57 @@ with st.container():
                         feature.name.lower().replace(" ", "_") or "feature"
                     )
                     logger.info("Generated %d scenarios", len(feature.scenarios))
+                    _go("output")
                 except Exception as e:
                     st.error(f"Scenario generation failed: {str(e)}")
 
-    # --- Stage 3: display the feature (runs whenever a feature exists in state) ---
-    if st.session_state.get("feature"):
-        st.subheader("Generated feature")
-        st.write(st.session_state.feature)
+    # --- STAGE 3: output + coverage check ---
+    elif st.session_state.stage == "output":
+        feature = st.session_state.feature
+        ac_ids = {a["id"] for a in st.session_state.ac_items}
+        covered = {v for sc in feature.scenarios for v in sc.verifies}
 
-            
+        gaps = sorted(ac_ids - covered, key=lambda x: (len(x), x))
+        if gaps:
+            st.warning(f"No scenario covers: {', '.join(gaps)}")
+        else:
+            st.success(
+                f"All {len(ac_ids)} criteria covered by {len(feature.scenarios)} scenarios."
+            )
+
+        # Flag any verifies pointing at ids the user did not approve.
+        stray = sorted({v for v in covered if v not in ac_ids})
+        if stray:
+            st.info(f"Scenarios reference unknown AC ids: {', '.join(stray)}")
+
+        st.code(feature_to_gherkin(feature), language="gherkin")
+
+        if st.button("<- Start over", width="stretch"):
+            st.session_state.feature = None
+            st.session_state.ac_items = []
+            _go("input")
+
+
 
 # Download buttons live outside and below the container.
 # They render whenever a result exists in session state.
-# if st.session_state.get("gherkin_text"):
-#     safe = st.session_state["download_basename"]
-#     dl_col1, dl_col2 = st.columns(2)
-#     with dl_col1:
-#         st.download_button(
-#             "Download .feature",
-#             st.session_state["gherkin_text"],
-#             file_name=f"{safe}.feature",
-#             mime="text/plain",
-#             use_container_width=True,
-#         )
-#     with dl_col2:
-#         st.download_button(
-#             "Download test cases (CSV)",
-#             st.session_state["csv_text"],
-#             file_name=f"{safe}_testcases.csv",
-#             mime="text/csv",
-#             use_container_width=True,
-#         )
+if st.session_state.stage == "output" and st.session_state.feature is not None:
+    feature = st.session_state.feature
+    safe = st.session_state.download_basename or "feature"
+    dl1, dl2, dl3 = st.columns(3)
+    with dl1:
+        st.download_button(
+            "Download .feature",
+            feature_to_gherkin(feature),
+            file_name=f"{safe}.feature",
+            mime="text/plain",
+            width="stretch",
+        )
+    with dl3:
+        st.download_button(
+            "Download test cases (CSV)",
+            feature_to_csv(feature),
+            file_name=f"{safe}_testcases.csv",
+            mime="text/csv",
+            width="stretch",
+        )

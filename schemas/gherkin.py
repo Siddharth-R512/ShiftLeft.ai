@@ -51,6 +51,7 @@ class Scenario(BaseModel):
     name: str
     tags: List[str] = Field(default_factory=list)
     is_outline: bool = False
+    verifies: List[str] = Field(default_factory=list)   # e.g. ["AC2", "AC5"]
     steps: List[Step]
     examples: Optional[Examples] = None
 
@@ -61,7 +62,7 @@ class Feature(BaseModel):
     background: Optional[List[Step]] = None
     scenarios: List[Scenario]
 
-# AC
+# Accceptance criteria
 class AcceptanceCriterion(BaseModel):
     id: str
     text: str

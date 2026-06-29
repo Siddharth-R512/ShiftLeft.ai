@@ -97,9 +97,13 @@ class Llm_handler:
                 last_error = e
                 logger.warning(f"Attempt {attempt+1} failed validation: {e}")
         raise last_error
-
-        
+    
     def generate_feature(self, messages, max_retries: int = 2) -> Feature:
+        """
+        Stage 2:
+        AC -> Scenarios
+        return validated Feature object. Retries on bad schema
+        """
         client = self._get_client()
         last_error = None
         for attempt in range(max_retries):
@@ -108,8 +112,7 @@ class Llm_handler:
                 max_tokens=4096, temperature=0.0, seed=42,
                 response_format={"type": "json_object"},
             )
-            raw = response.choices[0].message.content
-            raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            raw = self._strip_unwanted(raw=response.choices[0].message.content)
             try:
                 data = json.loads(raw)
                 return Feature.model_validate(data)

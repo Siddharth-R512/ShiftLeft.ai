@@ -159,6 +159,7 @@ with st.container(height=500):
                 llm = get_llm_handler()
                 with st.spinner("Generating scenarios..."):
                     feature = llm.generate_feature(messages)
+                    logger.info(feature)
 
                 st.success(f"Generated {len(feature.scenarios)} scenarios.")
 

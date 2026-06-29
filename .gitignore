@@ -226,3 +226,5 @@ requirements.txt
 # Large / temporary docs
 docs/*.pdf
 docs/*.docx
+docs/*.txt
+docs/*.ipynb

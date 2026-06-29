@@ -20,7 +20,7 @@ Emphasize these test types via scenario tags: {type_hint}
 Return a JSON object with exactly this structure:
 {{
   "name": "feature name",
-  "description": "As a... I want... So that...",
+  "description": "As a... \\nI want... \\nSo that...",
   "tags": ["string"],
   "background": [{{"keyword": "Given", "text": "..."}}] or null,
   "scenarios": [
@@ -46,7 +46,10 @@ Return a JSON object with exactly this structure:
 }}
 IMPORTANT: Use these EXACT key names, spelled exactly as shown:
 "name", "description", "tags", "background", "scenarios", "steps", "keyword", "text", "is_outline", "examples".
-Do not rename, abbreviate, or pluralize differently.
+Do not rename, abbreviate, or pluralize differently. 
+The "description" must be exactly three lines in the form
+"As a <role>", "I want <capability>", "So that <benefit>",
+separated by \\n escape characters — not a single run-on sentence.
 
 For Scenario Outlines, set "is_outline": true, reference placeholders in step text with <angle_brackets>, and provide a non-null "examples" object whose "headers" match those placeholders and whose "rows" each contain exactly one value per header. For regular scenarios, set "is_outline": false and "examples": null.
 
